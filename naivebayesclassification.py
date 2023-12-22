@@ -10,6 +10,7 @@ Original file is located at
 import pandas as pd
 from google.colab import files
 import io
+from sklearn.preprocessing import StandardScaler
 
 uploaded = files.upload()
 
@@ -17,22 +18,28 @@ data = io.BytesIO(uploaded["traindata.csv"])
 df = pd.read_csv(data, sep = None, engine = 'python')
 df
 
-X = df.drop('y', axis = 1)
-y = df.y
-X = (X - X.min()) / (X.max() - X.min())
+"""#Normalisasi
+Normalisasi memastikan bahwa variabel-variabel dengan skala yang berbeda-beda memiliki pengaruh yang setara dalam model.
 
+#Standarisasi
+Standarisasi mengubah distribusi data sehingga rata-ratanya menjadi 0 dan standar deviasinya menjadi 1, membantu algoritma yang mengasumsikan distribusi normal dan mengurangi pengaruh perbedaan skala antar variabel.
+"""
+
+#partisi data
+X = df.drop(['y','id'], axis = 1)
+y = df.y
+
+#normalisasi
+df = (X - X.min()) / (X.max() - X.min())
+
+#standarisasi
+numerical_cols = X.select_dtypes(include=['float64', 'int64']).columns
+scaler = StandardScaler()
+X[numerical_cols] = scaler.fit_transform(X[numerical_cols])
+
+#konkatenasi data
 df = pd.concat([X,y], axis = 1)
 df.head()
-
-#mengambil quarter pertama untuk testing dan 3 quarter sisanya untuk training
-fold_first_quarter = (df.iloc[0:74].reset_index(drop=True),              df.iloc[74:296].reset_index(drop=True))
-
-#mengambil 50 persen data dengan menyilang masing-masing untuk training dan testing
-fold_first_half = (pd.concat([df.iloc[0:74],df.iloc[148:222]]).reset_index(drop=True), pd.concat([df.iloc[74:148],df.iloc[222:296]]).reset_index(drop=True))
-fold_second_half = (pd.concat([df.iloc[74:148],df.iloc[148:222]]).reset_index(drop=True), pd.concat([df.iloc[0:74],df.iloc[222:296]]).reset_index(drop=True))
-
-#mengambil quarter akhir untuk testing dan quarter awal hingga quarter ke-tiga untuk training
-fold_last_quarter = (df.iloc[0:222].reset_index(drop=True),           df.iloc[222:296].reset_index(drop=True))
 
 #menghitung tingkat ketepatan model yang dibangun
 def akurasi(y_pred,y_true):
@@ -76,30 +83,59 @@ def gaussian_equation(x,mean,std):
 gaussian_equation(1,1,1)
 
 def calculation_probabilites_class(x, summaries):
-  n = sum([summaries[kelas].loc['count'].y for kelas in summaries])
-  probs = {}
-  for kelas in summaries:
-    probs[kelas] = summaries[kelas].loc['count'].y / n
-    for col in summaries[kelas].columns[:-1]:
-        mean, std, count = summaries[kelas][col]
-        probs[kelas] *= gaussian_equation(x[col],mean,std)
-  return probs
+    n = sum([summaries[kelas].loc['count'].y for kelas in summaries])
+    probs = {}
+    for kelas in summaries:
+        probs[kelas] = summaries[kelas].loc['count'].y / n
+        for col in summaries[kelas].columns[:-1]:
+            mean, std, _ = summaries[kelas].loc[:, col]
+            probs[kelas] *= gaussian_equation(x[col], mean, std) if std != 0 else 0
+    # Normalisasi probabilitas
+    total_prob = sum(probs.values())
+    for kelas in probs:
+      if total_prob != 0:
+        probs[kelas] /= total_prob
+      else:
+        probs[kelas] = 0
+    return probs
 
 summaries = summarize_by_class(df)
 
 calculation_probabilites_class(df.iloc[0],summaries)
 
-def predict(train,test):
-  preds = []
-  summaries = summarize_by_class(train)
-  for _,row in test.iterrows():
-    probs = calculation_probabilites_class(row, summaries)
-    preds.append(max(probs, key = probs.get))
-  return preds
+def predict(train, test):
+    preds = []
+    summaries = summarize_by_class(train)
+    for _, row in test.iterrows():
+        probs = calculation_probabilites_class(row, summaries)
+        preds.append(max(probs, key=probs.get))
+    return preds
 
-accurate = []
+"""#Data Folding
+memastikan bahwa model dinilai pada beragam subset data, mengurangi kemungkinan overfitting atau evaluasi yang terlalu berfokus pada karakteristik tertentu dari dataset. Dengan cara ini, data folding memberikan estimasi kinerja model yang lebih reliabel dan meminimalkan risiko overoptimistik pada hasil evaluasi.
+"""
 
-for fold in [fold_first_quarter, fold_first_half, fold_second_half, fold_last_quarter]:
+# Menentukan ukuran setiap bagian
+size = len(df)
+size_per_fold = size // 3
+
+# Mengambil bagian pertama untuk testing dan dua bagian sisanya untuk training
+fold_first = (df.iloc[:size_per_fold].reset_index(drop=True), df.iloc[size_per_fold:].reset_index(drop=True))
+
+# Mengambil 50 persen data dengan menyilang masing-masing untuk training dan testing
+fold_second = (pd.concat([df.iloc[:size_per_fold], df.iloc[2*size_per_fold:]]).reset_index(drop=True),
+               pd.concat([df.iloc[size_per_fold:2*size_per_fold]]).reset_index(drop=True))
+
+# Mengambil quarter akhir untuk testing dan dua quarter awal untuk training
+fold_third = (df.iloc[size_per_fold:].reset_index(drop=True), df.iloc[:2*size_per_fold].reset_index(drop=True))
+
+"""#Pengambilan Data Training terbaik untuk Testing Data Generation
+mengambil data training dengan akurasi tertinggi untuk dijadikan validation training data
+"""
+
+accuracies = []
+
+for fold_idx, fold in enumerate([fold_first, fold_second, fold_third], start=1):
     train, test = fold
 
     y_test = test.y
@@ -107,6 +143,47 @@ for fold in [fold_first_quarter, fold_first_half, fold_second_half, fold_last_qu
     # Add more print statements if needed
     y_preds = predict(train, test)
 
-    accurate.append(akurasi(y_preds, y_test))
+    accuracy = akurasi(y_preds, y_test)
+    accuracies.append(accuracy)
 
-print(f'rata-rata akurasi = {sum(accurate) / len(accurate):.2f}%')
+    print(f'Fold {fold_idx}: Akurasi = {accuracy:.2f}%')
+
+max_accuracy_fold = accuracies.index(max(accuracies)) + 1
+print(f'Akurasi tertinggi diperoleh pada Fold ke-{max_accuracy_fold} dengan akurasi {max(accuracies):.2f}%')
+
+"""#Validasi"""
+
+testdata = files.upload()
+
+data = io.BytesIO(testdata["testdata.csv"])
+df = pd.read_csv(data, sep = None, engine = 'python')
+df
+
+df = df.drop("id", axis = 1)
+df
+
+def generateDataFromModel():
+  preds = []
+  train = fold_third[0]
+  test = df
+  summaries = summarize_by_class(train)
+  for _, row in test.iterrows():
+        # Cek apakah nilai y pada baris saat ini adalah '?'
+        if row['y'] == '?':
+            # Hitung probabilitas menggunakan fungsi calculation_probabilites_class
+            probs = calculation_probabilites_class(row.drop('y'), summaries)
+            # Ambil kelas dengan probabilitas tertinggi sebagai hasil prediksi
+            predicted_class = max(probs, key=probs.get)
+            # Ganti nilai '?' dengan hasil prediksi
+            row['y'] = predicted_class
+        preds.append(row['y'])
+  return preds
+
+generateDataFromModel()
+
+"""##Save output to file"""
+
+predicted_values = generateDataFromModel()
+df['y'] = predicted_values
+df
+df.to_csv('predicted_data.csv', index=False)
