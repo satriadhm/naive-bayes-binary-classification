@@ -100,8 +100,13 @@ def calculation_probabilites_class(x, summaries):
     return probs
 
 summaries = summarize_by_class(df)
-
+print("Probabilitas kelas baris pertama: ")
 calculation_probabilites_class(df.iloc[0],summaries)
+
+"""#Model Generation
+
+Generasi model ke dalam fungsi predict untuk melatih data
+"""
 
 def predict(train, test):
     preds = []
@@ -162,7 +167,7 @@ df
 df = df.drop("id", axis = 1)
 df
 
-def generateDataFromModel():
+def generate_data_from_model():
   preds = []
   train = fold_third[0]
   test = df
@@ -179,11 +184,12 @@ def generateDataFromModel():
         preds.append(row['y'])
   return preds
 
-generateDataFromModel()
+generate_data_from_model()
 
 """##Save output to file"""
 
-predicted_values = generateDataFromModel()
+predicted_values = generate_data_from_model()
 df['y'] = predicted_values
 df
+
 df.to_csv('predicted_data.csv', index=False)
